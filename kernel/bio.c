@@ -52,6 +52,14 @@ binit(void)
   }
 }
 
+// 将来会替换bget的函数
+// 使用哈希表代替链表
+static struct buf*
+clm_bget(uint dev, uint blockno)
+{
+  uint bufHash = (dev + blockno) % NBUF;
+}
+
 // Look through buffer cache for block on device dev.
 // If not found, allocate a buffer.
 // In either case, return locked buffer.
