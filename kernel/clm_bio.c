@@ -24,8 +24,12 @@ struct
 {
     struct spinlock lock;
     struct clm_buf buf[NBUF];
-    struct clm_buf *bufHashTable[NBUF];
-    uint bufSize;
+
+    /**
+     * @brief 保存buffer指针的哈希表。
+     */
+    struct clm_buf *hash[NBUF];
+    uint hashSize;
     struct clm_buf head;
 } clm_bcache;
 
@@ -39,148 +43,148 @@ void clm_binit()
     struct clm_buf *b;
 
     initlock(&clm_bcache.lock, "bcache");
-    clm_bcache.bufSize = 0;
+    clm_bcache.hashSize = 0;
 
     for (b = clm_bcache.buf; b < clm_bcache.buf + NBUF; b++)
     {
+        b->next = clm_bcache.head.next;
+        b->prev = &clm_bcache.head;
         initsleeplock(&b->lock, "buffer");
+
+        // 初始状态，所有buffer均不在哈希表中
+        b->index = NBUF;
+
+        clm_bcache.head.next->prev = b;
+        clm_bcache.head.next = b;
     }
 
     clm_bcache.head.prev = &clm_bcache.head;
     clm_bcache.head.next = &clm_bcache.head;
 
-    for (int i = 0; i < NBUF; i++)
+    for (struct clm_buf **i = clm_bcache.hash; i < clm_bcache.hash + NBUF; i++)
     {
-        clm_bcache.bufHashTable[i] = clm_bcache.buf + i;
+        *i = 0;
+    }
+}
+
+/**
+ * @brief 使用双向平方探测法从哈希表中寻找指定的buffer。
+ * @return 如果找到，返回该buffer的二级地址；
+ * 如果没找到但找到了从未被分配过的空位，返回空位的地址；
+ * 否则，返回空指针。
+ */
+static struct clm_buf **clm_bFindFromHashTable(uint dev, uint blockno)
+{
+    if (clm_bcache.hashSize == NBUF)
+        return 0;
+
+    uint hash = (dev + blockno) % NBUF;
+
+    struct clm_buf **out = clm_bcache.hash + hash;
+    if ((*out)->dev == dev && (*out)->blockno == blockno && (*out)->index != NBUF)
+        return out;
+
+    for (uint i = 1; i <= NBUF / 2 + 1; i++)
+    {
+        uint positiveIndex = (hash + i * i) % NBUF;
+        uint negativeIndex = (hash - i * i) % NBUF;
+
+        out = clm_bcache.hash + positiveIndex;
+
+        if (((*out)->dev == dev && (*out)->blockno == blockno && (*out)->index != NBUF) || *out == 0)
+            return out;
+
+        out = clm_bcache.hash - positiveIndex;
+
+        if (((*out)->dev == dev && (*out)->blockno == blockno && (*out)->index != NBUF) || *out == 0)
+            return out;
+    }
+
+    return 0;
+}
+
+/**
+ * @brief 改进了bget。
+ *
+ * 获取已缓存buffer的过程改为由哈希表获取；
+ * 分配新buffer后将其插入哈希表。
+ */
+static struct clm_buf *clm_bget(uint dev, uint blockno)
+{
+    struct clm_buf *b;
+    struct clm_buf **index;
+
+    acquire(&clm_bcache.lock);
+
+    index = clm_bFindFromHashTable(dev, blockno);
+
+    if (index != 0) //说明找到了buffer或空位
+    {
+        b = *index;
+
+        if (b != 0) //说明找到了buffer
+        {
+            b->refcnt++;
+            release(&clm_bcache.lock);
+            acquiresleep(&b->lock);
+            return b;
+        }
+
+        // Not cached.
+        // Recycle the least recently used (LRU) unused buffer.
+        for (b = clm_bcache.head.prev; b != &clm_bcache.head; b = b->prev)
+        {
+            if (b->refcnt == 0)
+            {
+                b->dev = dev;
+                b->blockno = blockno;
+                b->valid = 0;
+                b->refcnt = 1;
+                release(&clm_bcache.lock);
+                acquiresleep(&b->lock);
+
+                //把新分配的buffer插入到哈希表的空位
+                *index = b;
+                b->index = index - clm_bcache.hash;
+                clm_bcache.hashSize++;
+
+                return b;
+            }
+        }
+    }
+    panic("bget: no buffers");
+}
+
+/**
+ * @brief 改进了brelse。
+ * 增加了从哈希表中移除buffer的步骤。
+ */
+void clm_brelse(struct clm_buf *b)
+{
+    if (!holdingsleep(&b->lock))
+        panic("brelse");
+
+    releasesleep(&b->lock);
+
+    acquire(&clm_bcache.lock);
+    b->refcnt--;
+    if (b->refcnt == 0)
+    {
+        // no one is waiting for it.
+        b->next->prev = b->prev;
+        b->prev->next = b->next;
         b->next = clm_bcache.head.next;
         b->prev = &clm_bcache.head;
         clm_bcache.head.next->prev = b;
         clm_bcache.head.next = b;
-    }
-}
 
-/**
- * @brief 从哈希表中获取buffer。
- * @return 如果buffer在哈希表中，返回该buffer；
- * 如果哈希表中没有该buffer，返回空指针。
- */
-static struct clm_buf *clm_bGetFromHashTable(uint dev, uint blockno)
-{
-    uint targetHash = (dev + blockno) % NBUF;
-
-    struct clm_buf *out = clm_bcache.bufHashTable[targetHash];
-
-    if (out->dev == dev && out->blockno == blockno)
-        return out;
-
-    for (uint i = 0; i < NBUF / 2 + 1; i++)
-    {
-        uint positiveIndex = (targetHash + i * i) % NBUF;
-        uint negativeIndex = (targetHash - i * i) % NBUF;
-
-        out = clm_bcache.bufHashTable[positiveIndex];
-
-        if (out->dev == dev && out->blockno == blockno)
-            return out;
-
-        if (out->hash == NBUF)
-            return 0;
-
-        out = clm_bcache.bufHashTable[negativeIndex];
-
-        if (out->dev == dev && out->blockno == blockno)
-            return out;
-
-        if (out->hash == NBUF)
-            return 0;
+        // b从哈希表中移除
+        b->index = NBUF;
+        clm_bcache.hashSize--;
+        if (clm_bcache.hashSize == 0)
+            for (struct clm_buf **i = clm_bcache.hash; i < clm_bcache.hash + NBUF; i++)
+                *i = 0;
     }
 
-    return 0;
-}
-
-/**
- * @brief 向哈希表中添加一个新的buffer。
- * @return 如果添加成功，返回新添加的buffer；
- * 如果哈希表已满，返回空指针。
- */
-static struct clm_buf *clm_bAddNewToHashTable(uint dev, uint blockno)
-{
-    uint targetHash = (dev + blockno) % NBUF;
-
-    struct clm_buf *out = clm_bcache.bufHashTable[targetHash];
-    if (!out->inTable)
-    {
-        out->hash = targetHash;
-        out->inTable = 1;
-        out->dev = dev;
-        out->blockno = blockno;
-        clm_bcache.bufSize++;
-        return out;
-    }
-
-    for (int i = 0; i < NBUF / 2 + 1; i++)
-    {
-        uint positiveIndex = (targetHash + i * i) % NBUF;
-        uint negativeIndex = (targetHash - i * i) % NBUF;
-
-        out = clm_bcache.bufHashTable[positiveIndex];
-
-        if (!out->inTable)
-        {
-            out->hash = targetHash;
-            out->inTable = 1;
-            out->dev = dev;
-            out->blockno = blockno;
-            clm_bcache.bufSize++;
-            return out;
-        }
-
-        out = clm_bcache.bufHashTable[negativeIndex];
-
-        if (!out->inTable)
-        {
-            out->hash = targetHash;
-            out->inTable = 1;
-            out->dev = dev;
-            out->blockno = blockno;
-            clm_bcache.bufSize++;
-            return out;
-        }
-    }
-
-    return 0;
-}
-
-static struct clm_buf *clm_bget(uint dev, uint blockno)
-{
-    struct buf *b;
-
-    acquire(&bcache.lock);
-
-    //如果b已经在哈希表中，返回b
-    b = clm_bGetFromHashTable(dev, blockno);
-    if (b != 0)
-    {
-        b->refcnt++;
-        release(&bcache.lock);
-        acquiresleep(&b->lock);
-        return b;
-    }
-
-    // Not cached.
-    // Recycle the least recently used (LRU) unused buffer.
-    for (b = bcache.head.prev; b != &bcache.head; b = b->prev)
-    {
-        if (b->refcnt == 0)
-        {
-            b->dev = dev;
-            b->blockno = blockno;
-            b->valid = 0;
-            b->refcnt = 1;
-            release(&bcache.lock);
-            acquiresleep(&b->lock);
-            return b;
-        }
-    }
-    panic("bget: no buffers");
+    release(&clm_bcache.lock);
 }
