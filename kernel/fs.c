@@ -400,6 +400,40 @@ bmap(struct inode *ip, uint bn)
     brelse(bp);
     return addr;
   }
+  bn -= NINDIRECT;
+
+  struct buf *bp2;
+  uint *a2;
+  if(bn < NDOUBLE_INDIRECT) // 0 <= bn <= 65535
+  {
+    if ((addr = ip->addrs[NDIRECT + 1]) == 0)
+    // never used double indirect
+    {
+      ip->addrs[NDIRECT + 1] = addr = balloc(ip->dev);
+    }
+    bp = bread(ip->dev, addr);  // bp consists 256 indirect
+    a = (uint*)bp->data;
+
+    uint bn_p = bn / NINDIRECT;       // position in double indirect 
+    uint bn_q = bn - bn_p * NINDIRECT;
+
+    if((addr = a[bn_p]) == 0)
+    {
+      a[bn_p] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    bp2 = bread(ip->dev, addr);
+    a2 = (uint*)bp2->data;
+    if((addr = a2[bn_q]) == 0)
+    {
+      a2[bn_q] = addr = balloc(ip->dev);
+      log_write(bp2);
+    }
+    brelse(bp2);
+    brelse(bp);
+    return addr;
+  }
+  
 
   panic("bmap: out of range");
 }
