@@ -205,6 +205,12 @@ ialloc(uint dev, short type)
     if(dip->type == 0){  // a free inode
       memset(dip, 0, sizeof(*dip));
       dip->type = type;
+
+      dip->atime = ticks;
+      dip->ctime = ticks;
+      dip->mtime = ticks;
+      dip->dtime = 0;
+
       log_write(bp);   // mark it allocated on the disk
       brelse(bp);
       return iget(dev, inum);
@@ -231,6 +237,12 @@ iupdate(struct inode *ip)
   dip->minor = ip->minor;
   dip->nlink = ip->nlink;
   dip->size = ip->size;
+
+  dip->atime = ip->atime;
+  dip->ctime = ip->ctime;
+  dip->mtime = ip->mtime;
+  dip->dtime = ip->dtime;
+
   memmove(dip->addrs, ip->addrs, sizeof(ip->addrs));
   log_write(bp);
   brelse(bp);
@@ -304,6 +316,12 @@ ilock(struct inode *ip)
     ip->minor = dip->minor;
     ip->nlink = dip->nlink;
     ip->size = dip->size;
+
+    ip->atime = dip->atime;
+    ip->ctime = dip->ctime;
+    ip->mtime = dip->mtime;
+    ip->dtime = dip->dtime;
+
     memmove(ip->addrs, dip->addrs, sizeof(ip->addrs));
     brelse(bp);
     ip->valid = 1;
@@ -321,6 +339,26 @@ iunlock(struct inode *ip)
 
   releasesleep(&ip->lock);
 }
+
+// Set 4 kinds of time in an inode
+// 
+// Param: ip  inode
+//        at  access time
+//        ct  create time
+//        mt  modify time
+//        dt  delete time
+
+void
+itimeset(struct inode *ip, uint at, uint ct, uint mt, uint dt)
+{
+  if(!holdingsleep(&ip->lock))
+    panic("inode timeset");
+  ip->atime = at;
+  ip->ctime = ct;
+  ip->mtime = mt;
+  ip->dtime = dt;
+}
+
 
 // Drop a reference to an in-memory inode.
 // If that was the last reference, the inode table entry can
@@ -497,6 +535,8 @@ readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
   if(off + n > ip->size)
     n = ip->size - off;
 
+  ip->atime = ticks;
+
   for(tot=0; tot<n; tot+=m, off+=m, dst+=m){
     bp = bread(ip->dev, bmap(ip, off/BSIZE));
     m = min(n - tot, BSIZE - off%BSIZE);
@@ -527,6 +567,9 @@ writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
     return -1;
   if(off + n > MAXFILE*BSIZE)
     return -1;
+
+  ip->atime = ticks;
+  ip->mtime = ticks;
 
   for(tot=0; tot<n; tot+=m, off+=m, src+=m){
     bp = bread(ip->dev, bmap(ip, off/BSIZE));

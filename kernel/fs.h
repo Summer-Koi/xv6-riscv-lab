@@ -20,6 +20,7 @@ struct superblock {
   uint logstart;     // Block number of first log block
   uint inodestart;   // Block number of first inode block
   uint bmapstart;    // Block number of first free map block
+  uint reserved[20];
 };
 
 #define FSMAGIC 0x10203040
@@ -36,9 +37,24 @@ struct dinode {
   short minor;          // Minor device number (T_DEVICE only)
   short nlink;          // Number of links to inode in file system
   uint size;            // Size of file (bytes)
-  uint addrs[NDIRECT+2];   // Data block addresses, double indirect added
-  uint blank[15];         // wei lai ke qi
+  uint addrs[NDIRECT+2];  // Data block addresses, double indirect added
+  uint32 atime;           // the last time this inode was accessed
+  uint32 ctime;           // when the inode was created
+  uint32 mtime;           // the last time this inode was modified
+  uint32 dtime;           // when the inode was deleted
+  uint iflags;            // flag
+  uint blank[10];         // for future use
 };
+
+// iflags values
+#define SECRM_FL        0x00000001    // secure deletion
+#define UNRM_FL         0x00000002    // record for undelete
+#define COMPR_FL        0x00000004    // compressed file
+#define SYNC_FL         0x00000008    // synchronous updates
+#define IMMUTABLE_FL    0x00000010    // Immutable File
+#define APPEND_FL       0x00000020    // Append Only
+#define NODUMP_FL       0x00000040    // Do No Dump/Delete
+#define NOATIME_FL      0x00000080    // Do Not Update .i_atime
 
 // Inodes per block.
 #define IPB           (BSIZE / sizeof(struct dinode))

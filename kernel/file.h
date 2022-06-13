@@ -27,7 +27,12 @@ struct inode {
   short nlink;
   uint size;
   uint addrs[NDIRECT+2];
-  uint blank[15];         // wei lai ke qi
+  uint32 atime;           // the last time this inode was accessed
+  uint32 ctime;           // when the inode was created
+  uint32 mtime;           // the last time this inode was modified
+  uint32 dtime;           // when the inode was deleted
+  uint iflags;            // flag
+  uint blank[10];         // for future use
 };
 
 // map major device number to device functions.
