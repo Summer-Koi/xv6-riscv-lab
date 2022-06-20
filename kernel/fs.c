@@ -659,6 +659,122 @@ dirlink(struct inode *dp, char *name, uint inum)
   return 0;
 }
 
+
+// Revised Directory Layer
+// 
+// 重写了 dirlookup 和 dirlink
+// 使用了新的目录结构体 dirent_vn，支持可变长度的目录名
+// 接口和原始函数保持一致
+// TODO:在这一基础上增加hash索引
+//
+
+int
+namecmp_vn(const char *s, const char *t, uint8 len)
+{
+  return strncmp(s, t, len);
+}
+
+struct inode*
+dirlookup_vn(struct inode *dp, char *name, uint *poff)
+{
+  uint32 inum;
+  struct dirent_vn de;
+
+  if (dp->type != T_DIR)
+  {
+    panic("dirlookup_vn not DIR");
+  }
+
+  uint32 off = 0;
+  while (off <= dp->size)
+  {
+    if(readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de)){
+      panic("dirlookup_vn readi");
+    }
+
+    if(de.inum == 0){
+      off += de.rec_len;
+      continue;
+    }
+
+    char* namebuf[NAME_MAX_LEN];
+    if(readi(dp, 0, (uint64)&namebuf, off + sizeof(de), de.name_len) != de.name_len){
+      panic("dirlookup_vn readi name");
+    }
+    if(namecmp_vn(namebuf, name, de.name_len) == 0){
+      if(poff)  // 记得修改poff处的代码
+      {
+        *poff = off;
+      }
+      return(iget(dp->dev, de.inum));
+    }
+  }
+  
+  return 0;
+}
+
+int
+dirlink_vn(struct inode *dp, char *name, uint8 n_len, uint inum)
+{
+
+  struct dirent_vn de;
+  struct inode *ip;
+
+  // check
+  if((ip = dirlookup_vn(dp, name, 0)) != 0){
+    iput(ip);
+    return -1;
+  }
+
+  // look for new
+  uint32 off = 0;
+  uint32 available_padding = 0;
+
+  while (off < dp->size)
+  {
+    if(readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de)){
+      panic("dirlink_vn readi");
+    }
+
+    if(de.inum == 0)
+      break;
+    available_padding = de.rec_len - sizeof(de) - de.name_len;
+    if(available_padding >= n_len)
+      break;
+
+    off += de.rec_len;
+  }
+
+  if(de.inum == 0)
+  // new
+  {
+    de.inum = inum;
+    de.name_len = n_len;
+    de.rec_len = sizeof(de) + de.name_len;
+    if(writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+      panic("dirlink_vn write new");
+    if(writei(dp, 0, (uint64)&name, off + sizeof(de), n_len) != n_len)
+      panic("dirlink_vn write new name");
+  }
+  else
+  // pad
+  {
+    struct dirent_vn newde;
+    newde.inum = inum;
+    newde.name_len = n_len;
+    newde.rec_len = available_padding;
+    de.rec_len -= available_padding;
+    if(writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+      panic("dirlink_vn write pad old");
+    if(writei(dp, 0, (uint64)&newde, off + de.rec_len, sizeof(newde)) != sizeof(newde))
+      panic("dirlink_vn write pad");
+    if(writei(dp, 0, (uint64)&name, off + de.rec_len, n_len) != n_len)
+      panic("dirlink_vn write pad name");
+  }
+  return 0;
+}
+
+
 // Paths
 
 // Copy the next path element from path into name.

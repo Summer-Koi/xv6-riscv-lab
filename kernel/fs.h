@@ -76,3 +76,14 @@ struct dirent {
   char name[DIRSIZ];
 };
 
+
+#define NAME_MAX_LEN 256
+// name 长度应该在 name_len 可以表示的范围中，定为 256*char
+
+struct dirent_vn
+{
+  uint32 inum;      //4 bytes
+  uint16 rec_len;   //2 bytes
+  uint8 name_len;    //1 byte
+  uint8 file_type;  //1 byte
+};
