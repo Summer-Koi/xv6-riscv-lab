@@ -412,6 +412,63 @@ iunlockput(struct inode *ip)
 
 // Return the disk block address of the nth block in inode ip.
 // If there is no such block, bmap allocates one.
+
+
+// Indirect-Path
+//
+// 给定深度，通过间接寻址寻找目标块，二重间接寻址深度为2
+// 
+
+static uint
+indirect_path(struct inode *ip, struct buf *bl, int depth, uint bn) // bn 应为残值
+{
+  uint addr;
+  uint *a;
+  a = (uint*)bl->data;
+
+  if (depth == 1) // 表明该层中可以直接读到目标数据块的位置
+  {
+    if (bn >= NINDIRECT)
+    {
+      printf("depth = %d, bn = %d\n", depth, bn);
+      panic("indirect path overflow");
+    }
+    addr = a[bn];
+    if (addr == 0)
+    {
+      a[bn] = addr = balloc(ip->dev);
+      log_write(bl);
+    }
+    brelse(bl);
+    return addr;
+  }
+  else  // 表明该层仍然是间接层
+  {
+    // 先解码bn, 分成高位和低位，高位用于片选
+    uint bn_high, bn_low;
+    if (depth == 2)
+    {
+      bn_high = bn / NINDIRECT;
+      bn_low = bn % NINDIRECT;
+    }
+    else
+    {
+      bn_high = bn / (NINDIRECT * NINDIRECT);
+      bn_low = bn % (NINDIRECT * NINDIRECT);
+    }
+    // 判断片选位是否初始化过
+    if (a[bn_high] == 0)
+    {
+      a[bn_high] = balloc(ip->dev);
+      log_write(bl);
+    }
+    struct buf *nextbl = bread(ip->dev, a[bn_high]);
+    addr = indirect_path(ip, nextbl, depth - 1, bn_low);
+    brelse(bl);
+    return addr;
+  }
+}
+
 static uint
 bmap(struct inode *ip, uint bn)
 {
@@ -423,6 +480,7 @@ bmap(struct inode *ip, uint bn)
       ip->addrs[bn] = addr = balloc(ip->dev);
     return addr;
   }
+  /*
   bn -= NDIRECT;
 
   if(bn < NINDIRECT){
@@ -438,41 +496,32 @@ bmap(struct inode *ip, uint bn)
     brelse(bp);
     return addr;
   }
-  bn -= NINDIRECT;
-
-  struct buf *bp2;
-  uint *a2;
-  if(bn < NDOUBLE_INDIRECT) // 0 <= bn <= 65535
+*/
+  bn -= NDIRECT;
+  if(bn < NINDIRECT)
   {
-    if ((addr = ip->addrs[NDIRECT + 1]) == 0)
-    // never used double indirect
-    {
+    if((addr = ip->addrs[NDIRECT]) == 0)
+      ip->addrs[NDIRECT] = addr = balloc(ip->dev);
+    bp = bread(ip->dev, addr);
+    return indirect_path(ip, bp, 1, bn);
+  }
+  bn -= NINDIRECT;
+  if(bn < DOUBLE_INDIRECT)
+  {
+    if((addr = ip->addrs[NDIRECT + 1]) == 0)
       ip->addrs[NDIRECT + 1] = addr = balloc(ip->dev);
-    }
-    bp = bread(ip->dev, addr);  // bp consists 256 indirect
-    a = (uint*)bp->data;
-
-    uint bn_p = bn / NINDIRECT;       // position in double indirect 
-    uint bn_q = bn - bn_p * NINDIRECT;
-
-    if((addr = a[bn_p]) == 0)
-    {
-      a[bn_p] = addr = balloc(ip->dev);
-      log_write(bp);
-    }
-    bp2 = bread(ip->dev, addr);
-    a2 = (uint*)bp2->data;
-    if((addr = a2[bn_q]) == 0)
-    {
-      a2[bn_q] = addr = balloc(ip->dev);
-      log_write(bp2);
-    }
-    brelse(bp2);
-    brelse(bp);
-    return addr;
+    bp = bread(ip->dev, addr);
+    return indirect_path(ip, bp, 2, bn);
+  }
+  bn -= DOUBLE_INDIRECT;
+  if(bn < TRIPLE_INDIRECT)
+  {
+    if((addr = ip->addrs[NDIRECT + 2]) == 0)
+      ip->addrs[NDIRECT + 2] = addr = balloc(ip->dev);
+    bp = bread(ip->dev, addr);
+    return indirect_path(ip, bp, 3, bn);
   }
   
-
   panic("bmap: out of range");
 }
 
@@ -664,8 +713,7 @@ dirlink(struct inode *dp, char *name, uint inum)
 // 
 // 重写了 dirlookup 和 dirlink
 // 使用了新的目录结构体 dirent_vn，支持可变长度的目录名
-// 接口和原始函数保持一致
-// TODO:在这一基础上增加hash索引
+// 接口和原始函数保持一致，但需要增加 remove 接口
 //
 
 int
@@ -675,7 +723,7 @@ namecmp_vn(const char *s, const char *t, uint8 len)
 }
 
 struct inode*
-dirlookup_vn(struct inode *dp, char *name, uint *poff)
+dirlookup_vn(struct inode *dp, char *name, uint8 n_len, uint *poff)
 {
   uint32 inum;
   struct dirent_vn de;
@@ -721,7 +769,7 @@ dirlink_vn(struct inode *dp, char *name, uint8 n_len, uint inum)
   struct inode *ip;
 
   // check
-  if((ip = dirlookup_vn(dp, name, 0)) != 0){
+  if((ip = dirlookup_vn(dp, name, n_len, 0)) != 0){
     iput(ip);
     return -1;
   }
@@ -773,6 +821,40 @@ dirlink_vn(struct inode *dp, char *name, uint8 n_len, uint inum)
   }
   return 0;
 }
+
+
+// Indexed Directory Layer
+// 
+// 重写了 dirlookup 和 dirlink
+// 使用了新的目录结构体 dirent_dx
+// 接口和原始函数保持一致，但需要增加 remove 接口，上一部分同理
+//
+
+
+
+
+struct inode*
+dirlookup_dx(struct inode *dp, char *name, uint8 n_len, uint *poff)
+{
+  uint inum;
+  struct meta_dx meta;
+  struct dirent_dx de;
+
+  if(dp->type != T_DIR)
+    panic("dirlookup_dx not DIR");
+
+  uint32 hashcode = murmur3_32(name, n_len, 14);
+  uint32 blockn = 1;
+  while (1)
+  {
+    
+  }
+  
+
+  return 0;
+}
+
+
 
 
 // Paths

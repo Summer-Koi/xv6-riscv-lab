@@ -184,3 +184,6 @@ void            virtio_disk_intr(void);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+
+//hash_func.c
+uint32          murmur3_32(const uint8* key, uint16 len, uint32 seed);

@@ -27,8 +27,9 @@ struct superblock {
 
 #define NDIRECT 12
 #define NINDIRECT (BSIZE / sizeof(uint))
-#define NDOUBLE_INDIRECT (NINDIRECT * NINDIRECT)
-#define MAXFILE (NDIRECT + NINDIRECT + NDOUBLE_INDIRECT)
+#define DOUBLE_INDIRECT (NINDIRECT * NINDIRECT)
+#define TRIPLE_INDIRECT (DOUBLE_INDIRECT * NINDIRECT)
+#define MAXFILE (NDIRECT + NINDIRECT + DOUBLE_INDIRECT + TRIPLE_INDIRECT)
 
 // On-disk inode structure
 struct dinode {
@@ -37,13 +38,13 @@ struct dinode {
   short minor;          // Minor device number (T_DEVICE only)
   short nlink;          // Number of links to inode in file system
   uint size;            // Size of file (bytes)
-  uint addrs[NDIRECT+2];  // Data block addresses, double indirect added
+  uint addrs[NDIRECT+3];  // Data block addresses, double(triple) indirect added
   uint32 atime;           // the last time this inode was accessed
   uint32 ctime;           // when the inode was created
   uint32 mtime;           // the last time this inode was modified
   uint32 dtime;           // when the inode was deleted
   uint iflags;            // flag
-  uint blank[10];         // for future use
+  uint blank[9];         // for future use
 };
 
 // iflags values
@@ -76,6 +77,8 @@ struct dirent {
   char name[DIRSIZ];
 };
 
+// Variable-Length-of-Name Directory
+// 可变长的顺序检索目录
 
 #define NAME_MAX_LEN 256
 // name 长度应该在 name_len 可以表示的范围中，定为 256*char
@@ -87,3 +90,24 @@ struct dirent_vn
   uint8 name_len;    //1 byte
   uint8 file_type;  //1 byte
 };
+
+// Indexed Directory
+// hash 索引检索目录
+// 
+// 每一个区中的结构
+// [ meta_dx | dirent_dx | ... | dirent_dx ]
+struct meta_dx
+{
+  uint8 count;    // 1 byte
+  uint32 max;     // 4 bytes
+  uint32 min;     // 4 bytes
+};
+
+struct dirent_dx
+{
+  uint32 inum;    // 4 bytes
+  uint32 hash;    // 4 bytes
+  char name_pre[4]; // 4 bytes
+};
+
+#define HASH_SIZE_PER_MT 256
