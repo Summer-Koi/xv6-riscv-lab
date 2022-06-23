@@ -127,6 +127,7 @@ UPROGS=\
 	$U/_mkdir\
 	$U/_mknod\
 	$U/_del\
+	$U/_remove\
 	$U/_restore\
 	$U/_rm\
 	$U/_mv\
