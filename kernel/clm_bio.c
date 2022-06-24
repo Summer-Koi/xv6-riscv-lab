@@ -18,7 +18,9 @@
 /**
  * @brief 改进了bcache。
  *
- * 增加了哈希表。
+ * 增加了哈希表；
+ * 移除了链表；
+ * 增加了堆。
  */
 struct
 {
@@ -29,41 +31,51 @@ struct
      * @brief 保存buffer指针的哈希表。
      */
     struct clm_buf *hash[NBUF];
-    uint hashSize;
+
+    /**
+     * @brief 保存buffer指针的堆。
+     */
+    struct clm_buf *heap[NBUF];
+
+    /**
+     * @brief 目前正在使用的buffer数量。
+     */
+    uint bufSize;
+
+    /**
+     * @brief 用于LRU算法的时间戳。
+     *
+     * 每次访问buffer，该时间戳+1。
+     */
+    uint timeStamp;
     struct clm_buf head;
 } clm_bcache;
 
 /**
  * @brief 改进了binit。
  *
- * 增加了哈希表的初始化。
+ * 增加了哈希表的初始化；
+ * 移除了链表的初始化；
+ * 增加了堆的初始化。
  */
 void clm_binit()
 {
     struct clm_buf *b;
 
     initlock(&clm_bcache.lock, "bcache");
-    clm_bcache.hashSize = 0;
+    clm_bcache.bufSize = 0;
 
-    for (b = clm_bcache.buf; b < clm_bcache.buf + NBUF; b++)
+    for (int i = 0; i < NBUF; i++)
     {
-        b->next = clm_bcache.head.next;
-        b->prev = &clm_bcache.head;
+        b = clm_bcache.buf + i;
         initsleeplock(&b->lock, "buffer");
 
-        // 初始状态，所有buffer均不在哈希表中
-        b->index = NBUF;
+        // 初始状态，所有buffer均不在哈希表和堆中
+        b->hashIndex = NBUF;
+        b->heapIndex = NBUF;
 
-        clm_bcache.head.next->prev = b;
-        clm_bcache.head.next = b;
-    }
-
-    clm_bcache.head.prev = &clm_bcache.head;
-    clm_bcache.head.next = &clm_bcache.head;
-
-    for (struct clm_buf **i = clm_bcache.hash; i < clm_bcache.hash + NBUF; i++)
-    {
-        *i = 0;
+        clm_bcache.hash[i] = 0;
+        clm_bcache.heap[i] = 0;
     }
 }
 
@@ -75,13 +87,14 @@ void clm_binit()
  */
 static struct clm_buf **clm_bFindFromHashTable(uint dev, uint blockno)
 {
-    if (clm_bcache.hashSize == NBUF)
+    if (clm_bcache.bufSize == NBUF)
         return 0;
 
     uint hash = (dev + blockno) % NBUF;
 
     struct clm_buf **out = clm_bcache.hash + hash;
-    if ((*out)->dev == dev && (*out)->blockno == blockno && (*out)->index != NBUF)
+
+    if ((*out)->dev == dev && (*out)->blockno == blockno)
         return out;
 
     for (uint i = 1; i <= NBUF / 2 + 1; i++)
@@ -91,12 +104,12 @@ static struct clm_buf **clm_bFindFromHashTable(uint dev, uint blockno)
 
         out = clm_bcache.hash + positiveIndex;
 
-        if (((*out)->dev == dev && (*out)->blockno == blockno && (*out)->index != NBUF) || *out == 0)
+        if (((*out)->dev == dev && (*out)->blockno == blockno) || *out == 0)
             return out;
 
         out = clm_bcache.hash - positiveIndex;
 
-        if (((*out)->dev == dev && (*out)->blockno == blockno && (*out)->index != NBUF) || *out == 0)
+        if (((*out)->dev == dev && (*out)->blockno == blockno) || *out == 0)
             return out;
     }
 
@@ -104,10 +117,67 @@ static struct clm_buf **clm_bFindFromHashTable(uint dev, uint blockno)
 }
 
 /**
+ * @brief 从指定位置开始上滤
+ */
+static void clm_bPercolateUp(int index)
+{
+    struct clm_buf *value = clm_bcache.heap[index];
+    int parentIndex = (index - 1) / 2;
+
+    while (index >= 0 && clm_bcache.heap[parentIndex]->timeStamp > value->timeStamp)
+    {
+        clm_bcache.heap[index] = clm_bcache.heap[parentIndex];
+        clm_bcache.heap[index]->heapIndex = index;
+        index = parentIndex;
+        parentIndex = (index - 1) / 2;
+    }
+
+    clm_bcache.heap[index] = value;
+    value->heapIndex = index;
+}
+
+/**
+ * @brief 从指定位置开始下滤
+ */
+static void clm_bPercolateDown(int index)
+{
+    int maxChild = 2 * (index + 1);
+    struct clm_buf *value = clm_bcache.heap[index];
+    char goDown = 1;
+    while (goDown && maxChild < clm_bcache.bufSize)
+    {
+        goDown = 0;
+        if (clm_bcache.heap[maxChild]->timeStamp < clm_bcache.heap[maxChild - 1]->timeStamp)
+            --maxChild;
+        if (value->timeStamp < clm_bcache.heap[maxChild]->timeStamp)
+        {
+            goDown = 1;
+            clm_bcache.heap[index] = clm_bcache.heap[maxChild];
+            clm_bcache.heap[index]->heapIndex = index;
+            index = maxChild;
+            maxChild = 2 * (maxChild + 1);
+        }
+    }
+    if (maxChild == clm_bcache.bufSize)
+    {
+        if (value->timeStamp < clm_bcache.heap[maxChild - 1]->timeStamp)
+        {
+            clm_bcache.heap[index] = clm_bcache.heap[maxChild - 1];
+            clm_bcache.heap[index]->heapIndex = index;
+            index = maxChild - 1;
+        }
+    }
+    clm_bcache.heap[index] = value;
+    value->heapIndex = index;
+}
+
+/**
  * @brief 改进了bget。
  *
  * 获取已缓存buffer的过程改为由哈希表获取；
  * 分配新buffer后将其插入哈希表。
+ *
+ * 获取到已缓存的buffer后，将其从堆中移除。
  */
 static struct clm_buf *clm_bget(uint dev, uint blockno)
 {
@@ -125,6 +195,20 @@ static struct clm_buf *clm_bget(uint dev, uint blockno)
         if (b != 0) //说明找到了buffer
         {
             b->refcnt++;
+
+            //从堆中移除b
+            int bIndex = b->heapIndex;
+            clm_bcache.heap[bIndex] = clm_bcache.heap[clm_bcache.bufSize - 1];
+            clm_bcache.heap[clm_bcache.bufSize - 1] = b;
+            clm_bcache.bufSize--;
+            b->heapIndex = NBUF;
+            if (clm_bcache.heap[bIndex]->timeStamp < clm_bcache.heap[(bIndex - 1) / 2])
+                clm_bPercolateUp(bIndex);
+            if (clm_bcache.heap[bIndex]->timeStamp > clm_bcache.heap[2 * (bIndex + 1)]->timeStamp)
+                clm_bPercolateDown(bIndex);
+            if (clm_bcache.heap[bIndex]->timeStamp > clm_bcache.heap[2 * bIndex + 1]->timeStamp)
+                clm_bPercolateDown(bIndex);
+
             release(&clm_bcache.lock);
             acquiresleep(&b->lock);
             return b;
@@ -145,8 +229,8 @@ static struct clm_buf *clm_bget(uint dev, uint blockno)
 
                 //把新分配的buffer插入到哈希表的空位
                 *index = b;
-                b->index = index - clm_bcache.hash;
-                clm_bcache.hashSize++;
+                b->hashIndex = index - clm_bcache.hash;
+                clm_bcache.bufSize++;
 
                 return b;
             }
@@ -157,7 +241,8 @@ static struct clm_buf *clm_bget(uint dev, uint blockno)
 
 /**
  * @brief 改进了brelse。
- * 增加了从哈希表中移除buffer的步骤。
+ *
+ * 增加了把buffer加入空闲buffer堆的步骤。
  */
 void clm_brelse(struct clm_buf *b)
 {
@@ -170,20 +255,14 @@ void clm_brelse(struct clm_buf *b)
     b->refcnt--;
     if (b->refcnt == 0)
     {
-        // no one is waiting for it.
-        b->next->prev = b->prev;
-        b->prev->next = b->next;
-        b->next = clm_bcache.head.next;
-        b->prev = &clm_bcache.head;
-        clm_bcache.head.next->prev = b;
-        clm_bcache.head.next = b;
+        //更新timeStamp
+        clm_bcache.timeStamp++;
+        b->timeStamp = clm_bcache.timeStamp;
 
-        // b从哈希表中移除
-        b->index = NBUF;
-        clm_bcache.hashSize--;
-        if (clm_bcache.hashSize == 0)
-            for (struct clm_buf **i = clm_bcache.hash; i < clm_bcache.hash + NBUF; i++)
-                *i = 0;
+        //把b加入堆中
+        clm_bcache.heap[clm_bcache.bufSize] = b;
+        clm_bcache.bufSize++;
+        clm_bPercolateUp(clm_bcache.bufSize - 1);
     }
 
     release(&clm_bcache.lock);
