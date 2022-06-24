@@ -70,7 +70,7 @@ void binit()
     struct buf *b;
 
     initlock(&bcache.lock, "bcache");
-    bcache.heapSize = 0;
+    bcache.heapSize = NBUF;
 
     for (int i = 0; i < NBUF; i++)
     {
@@ -197,11 +197,11 @@ static struct buf *bget(uint dev, uint blockno)
             bcache.heap[bcache.heapSize - 1] = b;
             bcache.heapSize--;
             b->heapIndex = NBUF;
-            if (bcache.heap[bIndex]->timeStamp < bcache.heap[(bIndex - 1) / 2])
+            if ((bIndex - 1) / 2 >= 0 && bcache.heap[bIndex]->timeStamp < bcache.heap[(bIndex - 1) / 2])
                 bPercolateUp(bIndex);
-            if (bcache.heap[bIndex]->timeStamp > bcache.heap[2 * (bIndex + 1)]->timeStamp)
+            if (2 * (bIndex + 1) < NBUF && bcache.heap[bIndex]->timeStamp > bcache.heap[2 * (bIndex + 1)]->timeStamp)
                 bPercolateDown(bIndex);
-            if (bcache.heap[bIndex]->timeStamp > bcache.heap[2 * bIndex + 1]->timeStamp)
+            if (2 * bIndex + 1 < NBUF && bcache.heap[bIndex]->timeStamp > bcache.heap[2 * bIndex + 1]->timeStamp)
                 bPercolateDown(bIndex);
         }
 
@@ -237,8 +237,6 @@ static struct buf *bget(uint dev, uint blockno)
             b->blockno = blockno;
             b->valid = 0;
             b->refcnt = 1;
-            release(&bcache.lock);
-            acquiresleep(&b->lock);
 
             //把新分配的buffer插入到哈希表的空位
             hash = (b->dev + b->blockno) % NBUF;
@@ -248,6 +246,8 @@ static struct buf *bget(uint dev, uint blockno)
             b->prev = 0;
             bcache.hash[hash] = b;
 
+            release(&bcache.lock);
+            acquiresleep(&b->lock);
             return b;
         }
     }
