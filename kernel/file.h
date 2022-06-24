@@ -32,7 +32,7 @@ struct inode {
   uint32 mtime;           // the last time this inode was modified
   uint32 dtime;           // when the inode was deleted
   uint iflags;            // flag
-  uint blank[10];         // for future use
+  uint blank[9];         // for future use
 };
 
 // map major device number to device functions.
