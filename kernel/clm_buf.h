@@ -17,15 +17,16 @@ struct clm_buf
     uint blockno;
     struct sleeplock lock;
     uint refcnt;
-    struct clm_buf *prev; // LRU cache list
-    struct clm_buf *next;
 
     /**
-     * @brief 该buffer在哈希表中的实际位置。
-     *
-     * 范围为[0, NBUF)，值为NBUF时代表该buffer不在哈希表中。（实际上此情况不可能出现）
+     * @brief 用于哈希表的链表前一项
      */
-    uint hashIndex;
+    struct clm_buf *prev;
+
+    /**
+     * @brief 用于哈希表的链表后一项
+     */
+    struct clm_buf *next;
 
     /**
      * @brief 该buffer在堆中的位置。
