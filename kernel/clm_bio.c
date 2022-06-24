@@ -69,13 +69,14 @@ void clm_binit()
         b = clm_bcache.buf + i;
         initsleeplock(&b->lock, "buffer");
 
-        // 初始状态，所有buffer均不在哈希表和堆中
-        b->heapIndex = NBUF;
+        // 初始状态，所有buffer均不在哈希表中，且在堆中
         b->prev = 0;
         b->next = 0;
-
         clm_bcache.hash[i] = 0;
-        clm_bcache.heap[i] = 0;
+
+        b->timeStamp = 0;
+        b->heapIndex = i;
+        clm_bcache.heap[i] = b;
     }
 }
 
@@ -170,12 +171,13 @@ static struct clm_buf *clm_bget(uint dev, uint blockno)
 {
     struct clm_buf *b;
     struct clm_buf **index;
+    uint hash;
 
     acquire(&clm_bcache.lock);
 
     b = clm_bFindFromHashTable(dev, blockno);
 
-    if (b != 0) //说明找到了buffer
+    if (b != 0)
     {
         b->refcnt++;
 
@@ -210,7 +212,19 @@ static struct clm_buf *clm_bget(uint dev, uint blockno)
 
         if (b->refcnt == 0)
         {
-            // TODO: 从哈希表中移除b
+            //从哈希表中移除b
+            if(b->prev == 0)
+            {
+                hash = (b->dev + b->blockno) % NBUF;
+                clm_bcache.hash[hash] = b->next;
+            }
+            else
+                b->prev->next = b->next;
+
+            if(b->next != 0)
+                b->next->prev = b->prev;
+
+            //原bget函数中的相关操作
             b->dev = dev;
             b->blockno = blockno;
             b->valid = 0;
@@ -218,7 +232,13 @@ static struct clm_buf *clm_bget(uint dev, uint blockno)
             release(&clm_bcache.lock);
             acquiresleep(&b->lock);
 
-            // TODO: 把新分配的buffer插入到哈希表的空位
+            //把新分配的buffer插入到哈希表的空位
+            hash = (b->dev + b->blockno) % NBUF;
+            b->next = clm_bcache.hash[hash];
+            if(b->next != 0)
+                b->next->prev = b;
+            b->prev = 0;
+            clm_bcache.hash[hash] = b;
 
             return b;
         }
