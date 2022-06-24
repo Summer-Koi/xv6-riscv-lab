@@ -9,7 +9,7 @@
  *
  * 增加了用来描述哈希表和堆的字段。
  */
-struct clm_buf
+struct buf
 {
     int valid; // has data been read from disk?
     int disk;  // does disk "own" buf?
@@ -21,12 +21,12 @@ struct clm_buf
     /**
      * @brief 用于哈希表的链表前一项
      */
-    struct clm_buf *prev;
+    struct buf *prev;
 
     /**
      * @brief 用于哈希表的链表后一项
      */
-    struct clm_buf *next;
+    struct buf *next;
 
     /**
      * @brief 该buffer在堆中的位置。
@@ -38,7 +38,7 @@ struct clm_buf
     /**
      * @brief 该buffer上次访问时的时间戳。
      *
-     * @see clm_bcache.timeStamp
+     * @see bcache.timeStamp
      */
     uint timeStamp;
 
