@@ -54,6 +54,15 @@ void            stati(struct inode*, struct stat*);
 int             writei(struct inode*, int, uint64, uint, uint);
 void            itrunc(struct inode*);
 
+int             dirlink_vn(struct inode*, char*, uint8, uint);
+struct inode*   dirlookup_vn(struct inode*, char *, uint8 , uint*, uint*);
+int             rmdir_vn(struct inode*, uint, uint);
+
+struct inode*   nameiparent_vn(char *path, char *name);
+struct inode*   namei_vn(char *path);
+int             rmdir_vn(struct inode* dp, uint off, uint lastoff);
+int             get_name_len(char* path);
+
 // ramdisk.c
 void            ramdiskinit(void);
 void            ramdiskintr(void);

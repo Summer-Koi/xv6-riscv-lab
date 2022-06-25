@@ -422,6 +422,8 @@ iunlockput(struct inode *ip)
 static uint
 indirect_path(struct inode *ip, struct buf *bl, int depth, uint bn) // bn 应为残值
 {
+  if(bn % 100 == 0)
+    printf("indir_path,depth=%d,bn=%d\n",depth, bn);
   uint addr;
   uint *a;
   a = (uint*)bl->data;
@@ -472,7 +474,7 @@ indirect_path(struct inode *ip, struct buf *bl, int depth, uint bn) // bn 应为
 static uint
 bmap(struct inode *ip, uint bn)
 {
-  uint addr, *a;
+  uint addr;
   struct buf *bp;
 
   if(bn < NDIRECT){
@@ -714,7 +716,7 @@ dirlink(struct inode *dp, char *name, uint inum)
 // 重写了 dirlookup 和 dirlink
 // 使用了新的目录结构体 dirent_vn，支持可变长度的目录名
 // 接口和原始函数保持一致，但需要增加 remove 接口
-//
+// for root dir, just use original
 
 int
 namecmp_vn(const char *s, const char *t, uint8 len)
@@ -723,41 +725,54 @@ namecmp_vn(const char *s, const char *t, uint8 len)
 }
 
 struct inode*
-dirlookup_vn(struct inode *dp, char *name, uint8 n_len, uint *poff)
+dirlookup_vn(struct inode *dp, char *name, uint8 n_len, uint *poff, uint *lastpoff)// lastpoff should set 0
 {
-  uint32 inum;
   struct dirent_vn de;
 
-  if (dp->type != T_DIR)
+  if (dp->type == T_DIR)
+    return dirlookup(dp, name, poff);
+  
+  if (dp->type != T_VNDIR)
   {
     panic("dirlookup_vn not DIR");
   }
 
+  //printf("dirlookup---dp=%d, size=%d,n_len=%d\n", dp->inum, dp->size, n_len);
   uint32 off = 0;
-  while (off <= dp->size)
+  while (off < dp->size)
   {
     if(readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de)){
       panic("dirlookup_vn readi");
     }
-
+    
     if(de.inum == 0){
       off += de.rec_len;
       continue;
     }
 
-    char* namebuf[NAME_MAX_LEN];
+    char namebuf[NAME_MAX_LEN];
+    memset(namebuf, 0, sizeof(namebuf));
     if(readi(dp, 0, (uint64)&namebuf, off + sizeof(de), de.name_len) != de.name_len){
       panic("dirlookup_vn readi name");
     }
-    if(namecmp_vn(namebuf, name, de.name_len) == 0){
-      if(poff)  // 记得修改poff处的代码
+    //printf("off=%d,len=%d\n",off,de.name_len);
+    //printf("%s___%s\n", namebuf, name);
+    if(namecmp_vn(namebuf, name, n_len) == 0){
+      //printf("bingo\n");
+      if(poff)
       {
         *poff = off;
       }
+
       return(iget(dp->dev, de.inum));
     }
+    if(lastpoff)
+    {
+      *lastpoff = off;
+    }
+    off += de.rec_len;
   }
-  
+  //printf("ALIVE!!---n_len:%d\n", n_len);
   return 0;
 }
 
@@ -765,15 +780,18 @@ int
 dirlink_vn(struct inode *dp, char *name, uint8 n_len, uint inum)
 {
 
+  if (dp->type == T_DIR){
+    return dirlink(dp, name, inum);
+  }
+
   struct dirent_vn de;
   struct inode *ip;
 
   // check
-  if((ip = dirlookup_vn(dp, name, n_len, 0)) != 0){
+  if((ip = dirlookup_vn(dp, name, n_len, 0, 0)) != 0){
     iput(ip);
     return -1;
   }
-
   // look for new
   uint32 off = 0;
   uint32 available_padding = 0;
@@ -793,15 +811,19 @@ dirlink_vn(struct inode *dp, char *name, uint8 n_len, uint inum)
     off += de.rec_len;
   }
 
-  if(de.inum == 0)
+  char namebuf[NAME_MAX_LEN];
+  memset(namebuf, 0, sizeof(namebuf));
+  memmove(namebuf, name, n_len);
+  if(off >= dp->size)
   // new
   {
     de.inum = inum;
     de.name_len = n_len;
     de.rec_len = sizeof(de) + de.name_len;
+    //printf("dirlink,new---n_len=%d, rec_len=%d, off=%d, name=%s\n",de.name_len,de.rec_len, off, name);
     if(writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
       panic("dirlink_vn write new");
-    if(writei(dp, 0, (uint64)&name, off + sizeof(de), n_len) != n_len)
+    if(writei(dp, 0, (uint64)&namebuf, off + sizeof(de), n_len) != n_len)
       panic("dirlink_vn write new name");
   }
   else
@@ -812,14 +834,43 @@ dirlink_vn(struct inode *dp, char *name, uint8 n_len, uint inum)
     newde.name_len = n_len;
     newde.rec_len = available_padding;
     de.rec_len -= available_padding;
+    //printf("dirlink,pad---------\n newde:inum:%d,n_len:%d,rec_len:%d\n",newde.inum, newde.name_len, newde.rec_len);
+
     if(writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
       panic("dirlink_vn write pad old");
     if(writei(dp, 0, (uint64)&newde, off + de.rec_len, sizeof(newde)) != sizeof(newde))
       panic("dirlink_vn write pad");
-    if(writei(dp, 0, (uint64)&name, off + de.rec_len, n_len) != n_len)
+    if(writei(dp, 0, (uint64)&namebuf, off + de.rec_len, n_len) != n_len)
       panic("dirlink_vn write pad name");
   }
   return 0;
+}
+
+int
+rmdir_vn(struct inode* dp, uint off, uint lastoff)
+{
+  struct dirent_vn de;
+  struct dirent_vn lastde;
+  if(dp->type == T_DIR)
+  {
+    memset(&de, 0, sizeof(de));
+    if(writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+      panic("unlink: writei");
+    return 0;
+  }
+  
+  if(readi(dp, 0, (uint64)&de, off, sizeof(de))!= sizeof(de))
+    panic("1111");
+  if(readi(dp, 0, (uint64)&lastde, lastoff, sizeof(de))!= sizeof(de))
+    panic("2222");
+
+  uint rec_len = de.rec_len;
+  lastde.rec_len += rec_len;
+  if(writei(dp, 0, (uint64)&lastde, lastoff, sizeof(lastde))!= sizeof(lastde))
+    panic("33333");
+
+  return 0;
+
 }
 
 
@@ -832,7 +883,7 @@ dirlink_vn(struct inode *dp, char *name, uint8 n_len, uint inum)
 
 
 
-
+/*
 struct inode*
 dirlookup_dx(struct inode *dp, char *name, uint8 n_len, uint *poff)
 {
@@ -853,7 +904,7 @@ dirlookup_dx(struct inode *dp, char *name, uint8 n_len, uint *poff)
 
   return 0;
 }
-
+*/
 
 
 
@@ -946,4 +997,105 @@ struct inode*
 nameiparent(char *path, char *name)
 {
   return namex(path, 1, name);
+}
+
+// revised path
+
+int 
+get_name_len(char* path)
+{
+  char *s;
+  int len;
+  while(1)
+  {
+    while(*path == '/')
+      path++;
+    if(*path == 0)
+      return 0;
+    s = path;
+    while(*path != '/' && *path != 0)
+      path++;
+    len = path - s;
+    if(*path == 0)
+    {
+      return len;
+    }
+  }
+}
+
+static char*
+skipelem_vn(char *path, char *name, uint8 *n_len)
+{
+  char *s;
+  int len;
+
+  while(*path == '/')
+    path++;
+  if(*path == 0)
+    return 0;
+  s = path;
+  while(*path != '/' && *path != 0)
+    path++;
+  len = path - s;
+  *n_len = len;
+  if(len >= DIRSIZ)
+    memmove(name, s, DIRSIZ);
+  else {
+    memmove(name, s, len);
+    name[len] = 0;
+  }
+  while(*path == '/')
+    path++;
+  return path;
+}
+
+static struct inode*
+namex_vn(char *path, int nameiparent, char *name)
+{
+  struct inode *ip, *next;
+  uint8 n_len;
+
+  if(*path == '/')
+    ip = iget(ROOTDEV, ROOTINO);
+  else
+    ip = idup(myproc()->cwd);
+  while((path = skipelem_vn(path, name, &n_len)) != 0){
+    //printf("ip=%d, path=%s,name=%s, n_len=%d\n",ip->inum, path, name, n_len);
+    ilock(ip);
+    if(ip->type != T_DIR && ip->type != T_VNDIR){
+      iunlockput(ip);
+      return 0;
+    }
+    if(nameiparent && *path == '\0'){
+      // Stop one level early.
+      iunlock(ip);
+      return ip;
+    }
+    
+    if((next = dirlookup_vn(ip, name, n_len, 0, 0)) == 0){
+      iunlockput(ip);
+      return 0;
+    }
+    //printf("qwqwq\n");
+    iunlockput(ip);
+    ip = next;
+  }
+  if(nameiparent){
+    iput(ip);
+    return 0;
+  }
+  return ip;
+}
+
+struct inode*
+namei_vn(char *path)
+{
+  char name[DIRSIZ];
+  return namex_vn(path, 0, name);
+}
+
+struct inode*
+nameiparent_vn(char *path, char *name)
+{
+  return namex_vn(path, 1, name);
 }
