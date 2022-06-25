@@ -178,7 +178,6 @@ static void bPercolateDown(int index)
 static struct buf *bget(uint dev, uint blockno)
 {
     struct buf *b;
-    struct buf **index;
     uint hash;
 
     acquire(&bcache.lock);
@@ -197,7 +196,7 @@ static struct buf *bget(uint dev, uint blockno)
             bcache.heap[bcache.heapSize - 1] = b;
             bcache.heapSize--;
             b->heapIndex = NBUF;
-            if ((bIndex - 1) / 2 >= 0 && bcache.heap[bIndex]->timeStamp < bcache.heap[(bIndex - 1) / 2])
+            if ((bIndex - 1) / 2 >= 0 && bcache.heap[bIndex]->timeStamp < bcache.heap[(bIndex - 1) / 2]->timeStamp)
                 bPercolateUp(bIndex);
             if (2 * (bIndex + 1) < NBUF && bcache.heap[bIndex]->timeStamp > bcache.heap[2 * (bIndex + 1)]->timeStamp)
                 bPercolateDown(bIndex);
