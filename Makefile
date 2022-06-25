@@ -131,6 +131,7 @@ UPROGS=\
 	$U/_restore\
 	$U/_rm\
 	$U/_mv\
+	$U/_search\
 	$U/_sh\
 	$U/_stressfs\
 	$U/_usertests\
