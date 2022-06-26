@@ -93,13 +93,14 @@ remove(char* path)
 
     // fprintf(2, "recur call\n");
     remove(buf);
+    
   }
   break;
   }
   close(fd);
-  fprintf(2, "unlink %s\n", path);
-  if (unlink(path) < 0)
-    fprintf(2, "failed to remove %s\n", path);
+  // fprintf(2, "unlink %s\n", path);
+  unlink(path);
+    // fprintf(2, "failed to remove %s\n", path);
 }
 
 int
