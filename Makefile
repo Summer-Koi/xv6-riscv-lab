@@ -126,7 +126,13 @@ UPROGS=\
 	$U/_ln\
 	$U/_ls\
 	$U/_mkdir\
+	$U/_mknod\
+	$U/_del\
+	$U/_remove\
+	$U/_restore\
 	$U/_rm\
+	$U/_mv\
+	$U/_search\
 	$U/_sh\
 	$U/_stressfs\
 	$U/_usertests\
