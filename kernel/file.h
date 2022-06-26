@@ -21,12 +21,20 @@ struct inode {
   struct sleeplock lock; // protects everything below here
   int valid;          // inode has been read from disk?
 
-  short type;         // copy of disk inode
-  short major;
-  short minor;
-  short nlink;
-  uint size;
-  uint addrs[NDIRECT+1];
+  short type;           // File type
+  short major;          // Major device number (T_DEVICE only)
+  short minor;          // Minor device number (T_DEVICE only)
+  short nlink;          // Number of links to inode in file system
+  uint size;            // Size of file (bytes)
+  uint addrs[NDIRECT+3];  // Data block addresses, double(triple) indirect added
+  uint32 atime;           // the last time this inode was accessed
+  uint32 ctime;           // when the inode was created
+  uint32 mtime;           // the last time this inode was modified
+  uint32 dtime;           // when the inode was deleted
+  uint iflags;            // flag
+  uint32 generation;      // indicate the file version
+  uint32 gid;             // group id
+  uint osd_2[7];          // OS dependant structure in EXT, be blank here
 };
 
 // map major device number to device functions.
