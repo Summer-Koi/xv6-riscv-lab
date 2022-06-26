@@ -17,7 +17,7 @@ main(int argc, char* argv[])
     strcpy(rs,"/");
     if(argc == 3)
       strcpy(rs,argv[2]);
-    fprintf(2,"rs : %s\n",rs);
+    // fprintf(2,"rs : %s\n",rs);
 
 
     int m = strlen(filename);
@@ -44,8 +44,8 @@ main(int argc, char* argv[])
         dest[p + j] = filename[j];
     }
 
-    fprintf(2, "source : %s\n", source);
-    fprintf(2, "dest : %s\n", dest);
+    // fprintf(2, "source : %s\n", source);
+    // fprintf(2, "dest : %s\n", dest);
 
     if (link(source, dest) < 0)
         fprintf(2, "can't restore %s: failed\n", argv[1]);

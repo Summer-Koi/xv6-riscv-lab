@@ -60,8 +60,8 @@ main(int argc, char* argv[])
   // fprintf(2, dest);
   // fprintf(2, "\n");
 
-  fprintf(2,"filemane : %s\n",filename);
-  fprintf(2, "dest : %s\n", dest);
+  // fprintf(2,"filemane : %s\n",filename);
+  // fprintf(2, "dest : %s\n", dest);
   if (link(filename, dest) < 0)
     fprintf(2, "can't del %s: failed\n", argv[1]);
   unlink(argv[1]);
