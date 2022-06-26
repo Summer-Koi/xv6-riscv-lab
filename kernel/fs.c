@@ -422,8 +422,6 @@ iunlockput(struct inode *ip)
 static uint
 indirect_path(struct inode *ip, struct buf *bl, int depth, uint bn) // bn 应为残值
 {
-  if(bn % 100 == 0)
-    printf("indir_path,depth=%d,bn=%d\n",depth, bn);
   uint addr;
   uint *a;
   a = (uint*)bl->data;

@@ -133,7 +133,7 @@ UPROGS=\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
-	$U/_testtime\
+	$U/_bigfile\
 	$U/_mkvndir
 
 fs.img: mkfs/mkfs README $(UPROGS) $(OBJS)
