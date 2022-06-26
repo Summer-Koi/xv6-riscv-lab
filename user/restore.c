@@ -5,19 +5,19 @@
 int
 main(int argc, char* argv[])
 {
-    if (argc != 2) {
-        fprintf(2, "Usage: del source\n");
+    if (argc < 2) {
+        fprintf(2, "Usage: restore file [path]\n");
         exit(1);
     }
 
-    if (mkdir("restored") < 0)
-        fprintf(2, "/restored is already exist\n");
-    else
-        fprintf(2, "Created /restored\n");
-
     char* filename = argv[1];
     char rb[] = "/recyclebin/";
-    char rs[] = "/restored/";
+    char rs[128];
+    memset(rs,0,sizeof(rs));
+    strcpy(rs,"/");
+    if(argc == 3)
+      strcpy(rs,argv[2]);
+    fprintf(2,"rs : %s\n",rs);
 
 
     int m = strlen(filename);
@@ -44,6 +44,8 @@ main(int argc, char* argv[])
         dest[p + j] = filename[j];
     }
 
+    fprintf(2, "source : %s\n", source);
+    fprintf(2, "dest : %s\n", dest);
 
     if (link(source, dest) < 0)
         fprintf(2, "can't restore %s: failed\n", argv[1]);
