@@ -133,7 +133,7 @@ UPROGS=\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
-	$U/_test\
+	$U/_manyfile\
 	$U/_logswitch\
 	$U/_bigfile\
 	$U/_mkvndir

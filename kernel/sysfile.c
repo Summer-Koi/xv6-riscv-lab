@@ -484,14 +484,3 @@ sys_pipe(void)
   }
   return 0;
 }
-
-
-uint64
-sys_logswitch(void)
-{
-  int x;
-  if(argint(0,&x) <0)
-  return -1;
-  switchs(x);
-  return 0;
-}

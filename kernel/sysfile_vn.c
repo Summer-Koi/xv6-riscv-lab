@@ -545,3 +545,13 @@ sys_isvndir(void)
   end_op();
   return -1;
 }
+
+uint64
+sys_logswitch(void)
+{
+  int x;
+  if(argint(0,&x) <0)
+    return -1;
+  switchs(x);
+    return 0;
+}
