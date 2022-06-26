@@ -23,6 +23,9 @@ int getpid(void);
 char* sbrk(int);
 int sleep(int);
 int uptime(void);
+int isvndir(const char*);
+int mkvndir(const char*);
+
 
 // ulib.c
 int stat(const char*, struct stat*);

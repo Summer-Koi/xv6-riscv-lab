@@ -205,6 +205,12 @@ ialloc(uint dev, short type)
     if(dip->type == 0){  // a free inode
       memset(dip, 0, sizeof(*dip));
       dip->type = type;
+
+      dip->atime = ticks;
+      dip->ctime = ticks;
+      dip->mtime = ticks;
+      dip->dtime = 0;
+
       log_write(bp);   // mark it allocated on the disk
       brelse(bp);
       return iget(dev, inum);
@@ -231,6 +237,12 @@ iupdate(struct inode *ip)
   dip->minor = ip->minor;
   dip->nlink = ip->nlink;
   dip->size = ip->size;
+
+  dip->atime = ip->atime;
+  dip->ctime = ip->ctime;
+  dip->mtime = ip->mtime;
+  dip->dtime = ip->dtime;
+
   memmove(dip->addrs, ip->addrs, sizeof(ip->addrs));
   log_write(bp);
   brelse(bp);
@@ -304,6 +316,12 @@ ilock(struct inode *ip)
     ip->minor = dip->minor;
     ip->nlink = dip->nlink;
     ip->size = dip->size;
+
+    ip->atime = dip->atime;
+    ip->ctime = dip->ctime;
+    ip->mtime = dip->mtime;
+    ip->dtime = dip->dtime;
+
     memmove(ip->addrs, dip->addrs, sizeof(ip->addrs));
     brelse(bp);
     ip->valid = 1;
@@ -321,6 +339,26 @@ iunlock(struct inode *ip)
 
   releasesleep(&ip->lock);
 }
+
+// Set 4 kinds of time in an inode
+// 
+// Param: ip  inode
+//        at  access time
+//        ct  create time
+//        mt  modify time
+//        dt  delete time
+
+void
+itimeset(struct inode *ip, uint at, uint ct, uint mt, uint dt)
+{
+  if(!holdingsleep(&ip->lock))
+    panic("inode timeset");
+  ip->atime = at;
+  ip->ctime = ct;
+  ip->mtime = mt;
+  ip->dtime = dt;
+}
+
 
 // Drop a reference to an in-memory inode.
 // If that was the last reference, the inode table entry can
@@ -374,10 +412,69 @@ iunlockput(struct inode *ip)
 
 // Return the disk block address of the nth block in inode ip.
 // If there is no such block, bmap allocates one.
+
+
+// Indirect-Path
+//
+// 给定深度，通过间接寻址寻找目标块，二重间接寻址深度为2
+// 
+
+static uint
+indirect_path(struct inode *ip, struct buf *bl, int depth, uint bn) // bn 应为残值
+{
+  if(bn % 100 == 0)
+    printf("indir_path,depth=%d,bn=%d\n",depth, bn);
+  uint addr;
+  uint *a;
+  a = (uint*)bl->data;
+
+  if (depth == 1) // 表明该层中可以直接读到目标数据块的位置
+  {
+    if (bn >= NINDIRECT)
+    {
+      printf("depth = %d, bn = %d\n", depth, bn);
+      panic("indirect path overflow");
+    }
+    addr = a[bn];
+    if (addr == 0)
+    {
+      a[bn] = addr = balloc(ip->dev);
+      log_write(bl);
+    }
+    brelse(bl);
+    return addr;
+  }
+  else  // 表明该层仍然是间接层
+  {
+    // 先解码bn, 分成高位和低位，高位用于片选
+    uint bn_high, bn_low;
+    if (depth == 2)
+    {
+      bn_high = bn / NINDIRECT;
+      bn_low = bn % NINDIRECT;
+    }
+    else
+    {
+      bn_high = bn / (NINDIRECT * NINDIRECT);
+      bn_low = bn % (NINDIRECT * NINDIRECT);
+    }
+    // 判断片选位是否初始化过
+    if (a[bn_high] == 0)
+    {
+      a[bn_high] = balloc(ip->dev);
+      log_write(bl);
+    }
+    struct buf *nextbl = bread(ip->dev, a[bn_high]);
+    addr = indirect_path(ip, nextbl, depth - 1, bn_low);
+    brelse(bl);
+    return addr;
+  }
+}
+
 static uint
 bmap(struct inode *ip, uint bn)
 {
-  uint addr, *a;
+  uint addr;
   struct buf *bp;
 
   if(bn < NDIRECT){
@@ -385,6 +482,7 @@ bmap(struct inode *ip, uint bn)
       ip->addrs[bn] = addr = balloc(ip->dev);
     return addr;
   }
+  /*
   bn -= NDIRECT;
 
   if(bn < NINDIRECT){
@@ -400,7 +498,32 @@ bmap(struct inode *ip, uint bn)
     brelse(bp);
     return addr;
   }
-
+*/
+  bn -= NDIRECT;
+  if(bn < NINDIRECT)
+  {
+    if((addr = ip->addrs[NDIRECT]) == 0)
+      ip->addrs[NDIRECT] = addr = balloc(ip->dev);
+    bp = bread(ip->dev, addr);
+    return indirect_path(ip, bp, 1, bn);
+  }
+  bn -= NINDIRECT;
+  if(bn < DOUBLE_INDIRECT)
+  {
+    if((addr = ip->addrs[NDIRECT + 1]) == 0)
+      ip->addrs[NDIRECT + 1] = addr = balloc(ip->dev);
+    bp = bread(ip->dev, addr);
+    return indirect_path(ip, bp, 2, bn);
+  }
+  bn -= DOUBLE_INDIRECT;
+  if(bn < TRIPLE_INDIRECT)
+  {
+    if((addr = ip->addrs[NDIRECT + 2]) == 0)
+      ip->addrs[NDIRECT + 2] = addr = balloc(ip->dev);
+    bp = bread(ip->dev, addr);
+    return indirect_path(ip, bp, 3, bn);
+  }
+  
   panic("bmap: out of range");
 }
 
@@ -463,6 +586,8 @@ readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
   if(off + n > ip->size)
     n = ip->size - off;
 
+  ip->atime = ticks;
+
   for(tot=0; tot<n; tot+=m, off+=m, dst+=m){
     bp = bread(ip->dev, bmap(ip, off/BSIZE));
     m = min(n - tot, BSIZE - off%BSIZE);
@@ -493,6 +618,9 @@ writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
     return -1;
   if(off + n > MAXFILE*BSIZE)
     return -1;
+
+  ip->atime = ticks;
+  ip->mtime = ticks;
 
   for(tot=0; tot<n; tot+=m, off+=m, src+=m){
     bp = bread(ip->dev, bmap(ip, off/BSIZE));
@@ -581,6 +709,204 @@ dirlink(struct inode *dp, char *name, uint inum)
 
   return 0;
 }
+
+
+// Revised Directory Layer
+// 
+// 重写了 dirlookup 和 dirlink
+// 使用了新的目录结构体 dirent_vn，支持可变长度的目录名
+// 接口和原始函数保持一致，但需要增加 remove 接口
+// for root dir, just use original
+
+int
+namecmp_vn(const char *s, const char *t, uint8 len)
+{
+  return strncmp(s, t, len);
+}
+
+struct inode*
+dirlookup_vn(struct inode *dp, char *name, uint8 n_len, uint *poff, uint *lastpoff)// lastpoff should set 0
+{
+  struct dirent_vn de;
+
+  if (dp->type == T_DIR)
+    return dirlookup(dp, name, poff);
+  
+  if (dp->type != T_VNDIR)
+  {
+    panic("dirlookup_vn not DIR");
+  }
+
+  //printf("dirlookup---dp=%d, size=%d,n_len=%d\n", dp->inum, dp->size, n_len);
+  uint32 off = 0;
+  while (off < dp->size)
+  {
+    if(readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de)){
+      panic("dirlookup_vn readi");
+    }
+    
+    if(de.inum == 0){
+      off += de.rec_len;
+      continue;
+    }
+
+    char namebuf[NAME_MAX_LEN];
+    memset(namebuf, 0, sizeof(namebuf));
+    if(readi(dp, 0, (uint64)&namebuf, off + sizeof(de), de.name_len) != de.name_len){
+      panic("dirlookup_vn readi name");
+    }
+    //printf("off=%d,len=%d\n",off,de.name_len);
+    //printf("%s___%s\n", namebuf, name);
+    if(namecmp_vn(namebuf, name, n_len) == 0){
+      //printf("bingo\n");
+      if(poff)
+      {
+        *poff = off;
+      }
+
+      return(iget(dp->dev, de.inum));
+    }
+    if(lastpoff)
+    {
+      *lastpoff = off;
+    }
+    off += de.rec_len;
+  }
+  //printf("ALIVE!!---n_len:%d\n", n_len);
+  return 0;
+}
+
+int
+dirlink_vn(struct inode *dp, char *name, uint8 n_len, uint inum)
+{
+
+  if (dp->type == T_DIR){
+    return dirlink(dp, name, inum);
+  }
+
+  struct dirent_vn de;
+  struct inode *ip;
+
+  // check
+  if((ip = dirlookup_vn(dp, name, n_len, 0, 0)) != 0){
+    iput(ip);
+    return -1;
+  }
+  // look for new
+  uint32 off = 0;
+  uint32 available_padding = 0;
+
+  while (off < dp->size)
+  {
+    if(readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de)){
+      panic("dirlink_vn readi");
+    }
+
+    if(de.inum == 0)
+      break;
+    available_padding = de.rec_len - sizeof(de) - de.name_len;
+    if(available_padding >= n_len)
+      break;
+
+    off += de.rec_len;
+  }
+
+  char namebuf[NAME_MAX_LEN];
+  memset(namebuf, 0, sizeof(namebuf));
+  memmove(namebuf, name, n_len);
+  if(off >= dp->size)
+  // new
+  {
+    de.inum = inum;
+    de.name_len = n_len;
+    de.rec_len = sizeof(de) + de.name_len;
+    //printf("dirlink,new---n_len=%d, rec_len=%d, off=%d, name=%s\n",de.name_len,de.rec_len, off, name);
+    if(writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+      panic("dirlink_vn write new");
+    if(writei(dp, 0, (uint64)&namebuf, off + sizeof(de), n_len) != n_len)
+      panic("dirlink_vn write new name");
+  }
+  else
+  // pad
+  {
+    struct dirent_vn newde;
+    newde.inum = inum;
+    newde.name_len = n_len;
+    newde.rec_len = available_padding;
+    de.rec_len -= available_padding;
+    //printf("dirlink,pad---------\n newde:inum:%d,n_len:%d,rec_len:%d\n",newde.inum, newde.name_len, newde.rec_len);
+
+    if(writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+      panic("dirlink_vn write pad old");
+    if(writei(dp, 0, (uint64)&newde, off + de.rec_len, sizeof(newde)) != sizeof(newde))
+      panic("dirlink_vn write pad");
+    if(writei(dp, 0, (uint64)&namebuf, off + de.rec_len, n_len) != n_len)
+      panic("dirlink_vn write pad name");
+  }
+  return 0;
+}
+
+int
+rmdir_vn(struct inode* dp, uint off, uint lastoff)
+{
+  struct dirent_vn de;
+  struct dirent_vn lastde;
+  if(dp->type == T_DIR)
+  {
+    memset(&de, 0, sizeof(de));
+    if(writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+      panic("unlink: writei");
+    return 0;
+  }
+  
+  if(readi(dp, 0, (uint64)&de, off, sizeof(de))!= sizeof(de))
+    panic("1111");
+  if(readi(dp, 0, (uint64)&lastde, lastoff, sizeof(de))!= sizeof(de))
+    panic("2222");
+
+  uint rec_len = de.rec_len;
+  lastde.rec_len += rec_len;
+  if(writei(dp, 0, (uint64)&lastde, lastoff, sizeof(lastde))!= sizeof(lastde))
+    panic("33333");
+
+  return 0;
+
+}
+
+
+// Indexed Directory Layer
+// 
+// 重写了 dirlookup 和 dirlink
+// 使用了新的目录结构体 dirent_dx
+// 接口和原始函数保持一致，但需要增加 remove 接口，上一部分同理
+//
+
+
+
+/*
+struct inode*
+dirlookup_dx(struct inode *dp, char *name, uint8 n_len, uint *poff)
+{
+  uint inum;
+  struct meta_dx meta;
+  struct dirent_dx de;
+
+  if(dp->type != T_DIR)
+    panic("dirlookup_dx not DIR");
+
+  uint32 hashcode = murmur3_32(name, n_len, 14);
+  uint32 blockn = 1;
+  while (1)
+  {
+    
+  }
+  
+
+  return 0;
+}
+*/
+
+
 
 // Paths
 
@@ -671,4 +997,105 @@ struct inode*
 nameiparent(char *path, char *name)
 {
   return namex(path, 1, name);
+}
+
+// revised path
+
+int 
+get_name_len(char* path)
+{
+  char *s;
+  int len;
+  while(1)
+  {
+    while(*path == '/')
+      path++;
+    if(*path == 0)
+      return 0;
+    s = path;
+    while(*path != '/' && *path != 0)
+      path++;
+    len = path - s;
+    if(*path == 0)
+    {
+      return len;
+    }
+  }
+}
+
+static char*
+skipelem_vn(char *path, char *name, uint8 *n_len)
+{
+  char *s;
+  int len;
+
+  while(*path == '/')
+    path++;
+  if(*path == 0)
+    return 0;
+  s = path;
+  while(*path != '/' && *path != 0)
+    path++;
+  len = path - s;
+  *n_len = len;
+  if(len >= DIRSIZ)
+    memmove(name, s, DIRSIZ);
+  else {
+    memmove(name, s, len);
+    name[len] = 0;
+  }
+  while(*path == '/')
+    path++;
+  return path;
+}
+
+static struct inode*
+namex_vn(char *path, int nameiparent, char *name)
+{
+  struct inode *ip, *next;
+  uint8 n_len;
+
+  if(*path == '/')
+    ip = iget(ROOTDEV, ROOTINO);
+  else
+    ip = idup(myproc()->cwd);
+  while((path = skipelem_vn(path, name, &n_len)) != 0){
+    //printf("ip=%d, path=%s,name=%s, n_len=%d\n",ip->inum, path, name, n_len);
+    ilock(ip);
+    if(ip->type != T_DIR && ip->type != T_VNDIR){
+      iunlockput(ip);
+      return 0;
+    }
+    if(nameiparent && *path == '\0'){
+      // Stop one level early.
+      iunlock(ip);
+      return ip;
+    }
+    
+    if((next = dirlookup_vn(ip, name, n_len, 0, 0)) == 0){
+      iunlockput(ip);
+      return 0;
+    }
+    //printf("qwqwq\n");
+    iunlockput(ip);
+    ip = next;
+  }
+  if(nameiparent){
+    iput(ip);
+    return 0;
+  }
+  return ip;
+}
+
+struct inode*
+namei_vn(char *path)
+{
+  char name[DIRSIZ];
+  return namex_vn(path, 0, name);
+}
+
+struct inode*
+nameiparent_vn(char *path, char *name)
+{
+  return namex_vn(path, 1, name);
 }
