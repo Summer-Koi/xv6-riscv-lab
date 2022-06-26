@@ -36,5 +36,6 @@ entry("getpid");
 entry("sbrk");
 entry("sleep");
 entry("uptime");
+entry("logswitch");
 entry("isvndir");
 entry("mkvndir");

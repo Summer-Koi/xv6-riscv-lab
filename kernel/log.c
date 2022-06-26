@@ -48,6 +48,8 @@ struct log {
 };
 struct log log;
 
+int logstate;
+
 static void recover_from_log(void);
 static void commit();
 
@@ -56,7 +58,8 @@ initlog(int dev, struct superblock *sb)
 {
   if (sizeof(struct logheader) >= BSIZE)
     panic("initlog: too big logheader");
-
+    
+  logstate = 0;
   initlock(&log.lock, "log");
   log.start = sb->logstart;
   log.size = sb->nlog;
@@ -126,6 +129,8 @@ recover_from_log(void)
 void
 begin_op(void)
 {
+  if(logstate_get() != 0)
+  {
   acquire(&log.lock);
   while(1){
     if(log.committing){
@@ -139,6 +144,7 @@ begin_op(void)
       break;
     }
   }
+  }
 }
 
 // called at the end of each FS system call.
@@ -146,7 +152,9 @@ begin_op(void)
 void
 end_op(void)
 {
-  int do_commit = 0;
+  if(logstate_get() != 0)
+  {
+    int do_commit = 0;
 
   acquire(&log.lock);
   log.outstanding -= 1;
@@ -171,6 +179,7 @@ end_op(void)
     log.committing = 0;
     wakeup(&log);
     release(&log.lock);
+  }
   }
 }
 
@@ -234,3 +243,14 @@ log_write(struct buf *b)
   release(&log.lock);
 }
 
+void
+switchs(int lstat)
+{
+  logstate = lstat;
+}
+
+int
+logstate_get(void)
+{
+  return logstate;
+}

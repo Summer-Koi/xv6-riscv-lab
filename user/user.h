@@ -23,6 +23,7 @@ int getpid(void);
 char* sbrk(int);
 int sleep(int);
 int uptime(void);
+int logswitch(int);
 int isvndir(const char*);
 int mkvndir(const char*);
 
