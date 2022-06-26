@@ -44,7 +44,9 @@ struct dinode {
   uint32 mtime;           // the last time this inode was modified
   uint32 dtime;           // when the inode was deleted
   uint iflags;            // flag
-  uint blank[9];         // for future use
+  uint32 generation;      // indicate the file version
+  uint32 gid;             // group id
+  uint osd_2[7];          // OS dependant structure in EXT, be blank here
 };
 
 // iflags values
